@@ -6,6 +6,7 @@ module containing the ditra handlers
 
 import asyncore
 import socket
+import time
 
 import messages
 
@@ -24,27 +25,42 @@ class BasicDispatcher(asyncore.dispatcher):
         self.address = address
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.connect((address, port))
-        self.buffer = ""
+        self.buffer = []
 
     def handle_message(self, message):
-        pass
+        """Placeholder, to be overridden when inheriting"""
+        print "[WARNING] No message handling implemented!"
 
     def handle_read(self):
-        message= self.recv(1024)
-        parsed_message = messages.parse(message)
-        print "From %s:%s received: " % (self.address, self.port), \
-               messages.get_type(parsed_message)
-        if parsed_message.type == 2:
-            self.buffer += messages.of_echo_reply.pack()
-        else:
-            self.handle_message(message)
+        """receive, parse and pass packets to handle_message()"""
+        packet = self.recv(4096)
+        if packet == "":
+                print "[WARNING] Socket closed by remote host!"
+                self.close()
+        packet_list = messages.separate_messages(packet)
+        received_types = " + ".join(
+            messages.get_message_type(messages.parse(packet))
+            for packet in packet_list) # todo
+        print "From %s:%s received: " % (self.address, self.port), received_types
+
+        # Process a single message at a time
+        for packet in packet_list:
+            message = messages.parse(packet)
+            if messages.get_message_type(message) == "OFPT_ECHO_REQUEST":
+                self.buffer.append(messages.of_echo_reply)
+            else:
+                self.handle_message(message)
 
     def handle_write(self):
-        if self.buffer:
-            self.send(self.buffer)
-            print "To %s:%s sent: " % (self.address, self.port), \
-                   messages.get_type(self.buffer)
-            self.buffer = ""
+        """Send the content of self.buffer on the socket, self.buffer
+        must be a list of OFObjects
+        """
+        send_types = " + ".join(
+            messages.get_message_type(message) for message in self.buffer) # todo
+        for message in self.buffer:
+            self.send(message.pack())
+        self.buffer = []
+        print "To %s:%s sent: " % (self.address, self.port), send_types
 
     def writable(self):
         return bool(self.buffer)
@@ -52,37 +68,107 @@ class BasicDispatcher(asyncore.dispatcher):
 
 class Switch(BasicDispatcher):
     """Switch handling functionality, understandable by asyncore"""
-    def __init__(self, (address, port)):
+    def __init__(self, (address, port, needs_migration)):
         BasicDispatcher.__init__(self, (address, port))
+        self.hello_received = False
+        self.features_reply_received = False
+        self.needs_migration = needs_migration
+        self.migrating = False
+        self.dpid = ""
         self.controller = None
-        print "Switch initiated on: %s:%s" % (address, port)
+        self.controller_active = False
 
-    def set_controller(self, controller):
-        self.controller = controller
+    def activate_controller(self):
+        if self.controller:
+            self.controller_active = True
+            self.controller.add_switch(self)
+            print "controller activated"
+        else:
+            print "[WARNING] Controller undefined"
+
+    def handle_handshake(self, message):
+        message_type = messages.get_message_type(message)
+        if message_type == "OFPT_HELLO":
+            self.hello_received = True
+        if message_type == "OFPT_FEATURES_REPLY":
+            self.features_reply_received = True
+            self.dpid = message.datapath_id
+        if self.features_reply_received and self.hello_received:
+            print "Switch on: %s:%s has the datapath ID: %s" % (
+                self.address, self.port, self.dpid)
+            if self.needs_migration:
+                print "Migrating switch..."
+                self.handle_migration(message)
+            else:
+                self.activate_controller()
+
+    def handle_migration(self, message):
+        if self.migrating:
+            if messages.get_message_type(message) == "OFPT_FLOW_REMOVED":
+                self.buffer.append(messages.of_master_role_request)
+                # todo: wait for role reply, use xid to differentiate ?
+            elif messages.get_message_type(message) == "OFPT_ROLE_REPLY":
+            # todo: messages received before role reply might be lost
+                self.migrating = False
+                self.needs_migration = False
+                print "Switch migration successfully completed!"
+                time.sleep(0.2) # make sure the old controller got the message
+                self.activate_controller()
+        else:
+            self.buffer.append(messages.of_flow_add)
+            self.migrating = True
 
     def handle_connect(self):
-        pass
-        #self.send(of_hello)
-        #self.send(of_features_request)
-        #self.send(of_role_request)
-        #self.send(of_set_config)
+        print "Switch initiated on: %s:%s" % (self.address, self.port)
+        self.buffer.append(messages.of_hello)
+        self.buffer.append(messages.of_features_request)
+        self.buffer.append(messages.of_set_config)
 
     def handle_message(self, message):
-        self.controller.buffer += message
+        # Still doing the initial handshake
+        if not (self.hello_received and self.features_reply_received):
+            self.handle_handshake(message)
+        # Switch still being migrated
+        elif self.migrating:
+            self.handle_migration(message)
+        else:
+            if messages.get_message_type(message) == "OFPT_FLOW_REMOVED":
+                # cookie 1991 is reserved for switch migration
+                if message.cookie == 1991:
+                    print "giving up control"
+                    self.close()
+                    print "Handler for switch %s closed." % self.dpid
+                    self.controller.close() # todo this should not be handler here
+            if self.controller_active:
+                self.controller.buffer.append(message)
 
 
 class Controller(BasicDispatcher):
     """Controller handling functionality, understandable by asyncore"""
     def __init__(self, (address, port)):
         BasicDispatcher.__init__(self, (address, port))
-        self.switch = None
-        print "Controller initiated on: %s:%s" % (address, port)
-
-    def set_switch(self, switch):
-        self.switch = switch
+        self.switches = []
+        self.hello_received = False
+        self.internal_switch_buffer = []
 
     def handle_connect(self):
-        pass
+        print "Controller initiated on: %s:%s" % (self.address, self.port)
+        self.buffer.append(messages.of_hello)
+
+    def add_switch(self, switch):
+        self.switches.append(switch)
+        for message in self.internal_switch_buffer:
+            switch.buffer.append(message)
+        self.internal_switch_buffer = []
+        # todo: add a buffer for each switch ?
 
     def handle_message(self, message):
-        self.switch.buffer += message
+        if not self.hello_received:
+            if messages.get_message_type(message) == "OFPT_HELLO":
+                self.hello_received = True
+        elif self.switches:
+            for message in self.internal_switch_buffer:
+                self.switches[0].buffer.append(message)
+            self.switches[0].buffer.append(message) # todo: handle multiple switches
+        else:
+            self.internal_switch_buffer.append(message)

@@ -16,9 +16,10 @@ import handlers
 
 # ------------------ Configuration ------------------
 
-switches = [("192.168.57.102", 9999)]
-controllers = [("192.168.57.101", 6633)]
-control_maps = []
+SWITCHES = [("192.168.57.102", 6634, True)]
+CONTROLLERS = []
+CONTROLLERS = [("192.168.57.101", 6633)]
+MAPS = []
 
 # ---------------------------------------------------
 
@@ -31,15 +32,15 @@ def main():
     step is to start the asyncore loop
     """
     switch_handlers = []
-    for ip_port_pair in switches:
-        switch_handlers.append(handlers.Switch(ip_port_pair))
+    for switch in SWITCHES:
+        switch_handlers.append(handlers.Switch(switch))
 
     controller_handlers = []
-    for ip_port_pair in controllers:
-        controller_handlers.append(handlers.Controller(ip_port_pair))
+    for controller in CONTROLLERS:
+        controller_handlers.append(handlers.Controller(controller))
 
-    controller_handlers[0].set_switch(switch_handlers[0])
-    switch_handlers[0].set_controller(controller_handlers[0])
+    if controller_handlers:
+        switch_handlers[0].controller = controller_handlers[0]
 
     while True:
         asyncore.loop()
