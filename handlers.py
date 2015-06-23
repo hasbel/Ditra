@@ -34,9 +34,12 @@ class BasicDispatcher(asyncore.dispatcher):
     def handle_read(self):
         """receive, parse and pass packets to handle_message()"""
         packet = self.recv(4096)
+        if packet == "ha":
+            return
         if packet == "":
-                print "[WARNING] Socket closed by remote host!"
-                self.close()
+            print "[WARNING] Socket closed by remote host!"
+            self.close()
+            return
         packet_list = messages.separate_messages(packet)
         received_types = " + ".join(
             messages.get_message_type(messages.parse(packet))
@@ -68,21 +71,23 @@ class BasicDispatcher(asyncore.dispatcher):
 
 class Switch(BasicDispatcher):
     """Switch handling functionality, understandable by asyncore"""
-    def __init__(self, (address, port, needs_migration)):
+    def __init__(self, (address, port, needs_migration), controller_data=None):
         BasicDispatcher.__init__(self, (address, port))
         self.hello_received = False
         self.features_reply_received = False
         self.needs_migration = needs_migration
         self.migrating = False
         self.dpid = ""
+        self.controller_data = controller_data
         self.controller = None
         self.controller_active = False
 
-    def activate_controller(self):
-        if self.controller:
+    def activate_controller(self, migrating=False):
+        if self.controller_data:
+            print "Activating controller..."
+            self.controller = Controller(self.controller_data, migrating)
             self.controller_active = True
             self.controller.add_switch(self)
-            print "controller activated"
         else:
             print "[WARNING] Controller undefined"
 
@@ -113,10 +118,10 @@ class Switch(BasicDispatcher):
                 self.needs_migration = False
                 print "Switch migration successfully completed!"
                 time.sleep(0.2) # make sure the old controller got the message
-                self.activate_controller()
         else:
             self.buffer.append(messages.of_flow_add)
             self.migrating = True
+            self.activate_controller(migrating=True)
 
     def handle_connect(self):
         print "Switch initiated on: %s:%s" % (self.address, self.port)
@@ -138,22 +143,31 @@ class Switch(BasicDispatcher):
                     print "giving up control"
                     self.close()
                     print "Handler for switch %s closed." % self.dpid
-                    self.controller.close() # todo this should not be handler here
+                    self.controller.close() # todo this should not be handled here
             if self.controller_active:
                 self.controller.buffer.append(message)
 
 
 class Controller(BasicDispatcher):
     """Controller handling functionality, understandable by asyncore"""
-    def __init__(self, (address, port)):
+    def __init__(self, (address, port), needs_migration=False):
         BasicDispatcher.__init__(self, (address, port))
         self.switches = []
         self.hello_received = False
         self.internal_switch_buffer = []
+        self.needs_migration = needs_migration
+        self.ct_addr = "192.168.57.101"
+        self.ct_port = 6633
+        self.socket.setblocking(1)
+        self.socket.send(self.ct_addr + ":" + str(self.ct_port))
+        self.socket.setblocking(0)
 
     def handle_connect(self):
         print "Controller initiated on: %s:%s" % (self.address, self.port)
-        self.buffer.append(messages.of_hello)
+        if self.needs_migration:
+            self.hello_received = True
+        else:
+            self.buffer.append(messages.of_hello)
 
     def add_switch(self, switch):
         self.switches.append(switch)

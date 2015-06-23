@@ -17,9 +17,8 @@ import handlers
 # ------------------ Configuration ------------------
 
 SWITCHES = [("192.168.57.102", 6634, True)]
-CONTROLLERS = []
-CONTROLLERS = [("192.168.57.101", 6633)]
-MAPS = []
+CONTROLLERS = [("192.168.57.1", 6633)]
+MAP = {}
 
 # ---------------------------------------------------
 
@@ -32,18 +31,13 @@ def main():
     step is to start the asyncore loop
     """
     switch_handlers = []
-    for switch in SWITCHES:
-        switch_handlers.append(handlers.Switch(switch))
-
-    controller_handlers = []
-    for controller in CONTROLLERS:
-        controller_handlers.append(handlers.Controller(controller))
-
-    if controller_handlers:
-        switch_handlers[0].controller = controller_handlers[0]
+    for switch_data in SWITCHES:
+        switch_handlers.append(handlers.Switch(
+            switch_data,
+            controller_data=CONTROLLERS[0]))
 
     while True:
-        asyncore.loop()
+        asyncore.loop(use_poll=True)
 
 if __name__ == '__main__':
     try:
