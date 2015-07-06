@@ -9,6 +9,7 @@ proxy for use with ditra
 import sys
 import asyncore
 import socket
+import time
 
 
 # ------------------ Configuration ------------------
@@ -34,11 +35,11 @@ class ConnectionAcceptor(asyncore.dispatcher):
         pair = self.accept()
         if pair:
             sock, address = pair
-            Connector(sock)
+            Hypervisor(sock)
             print "Connection from: ", address
 
 
-class Connector(asyncore.dispatcher):
+class Hypervisor(asyncore.dispatcher):
     def __init__(self, sock):
         asyncore.dispatcher.__init__(self, sock=sock)
         self.controller = None
@@ -47,7 +48,7 @@ class Connector(asyncore.dispatcher):
     def handle_read(self):
         packet = self.recv(4096)
         if packet == "":
-            print "[WARNING] Socket closed by remote host!"
+            print "[WARNING] Socket closed by remote hypervisor!"
             self.close()
             return
         # Initiate controller
@@ -58,15 +59,16 @@ class Connector(asyncore.dispatcher):
             pair = (controller_address, controller_port)
             if pair in CONTROLLERS:
                 self.controller = CONTROLLERS[pair]
-                self.controller.connector.close()
+                self.controller.hypervisor.close()
                 print "Controller switched"
             else:
                 self.controller = Controller(pair)
                 CONTROLLERS[pair] = self.controller
-            self.controller.connector = self
+            self.controller.hypervisor = self
+            time.sleep(0.1)
             return
         # If controller initiated, pass messages
-        if self.controller and self.controller.connector == self:
+        if self.controller and self.controller.hypervisor == self:
             self.controller.buffer += packet
 
     def handle_write(self):
@@ -90,17 +92,17 @@ class Controller(asyncore.dispatcher):
         self.address = address
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.connect((address, port))
-        self.connector = None
+        self.hypervisor = None
         self.buffer = ""
         print "controller started on: %s:%s" % (address, port)
 
     def handle_read(self):
         packet = self.recv(4096)
         if packet == "":
-            print "[WARNING] Socket closed by remote host!"
+            print "[WARNING] Socket closed by remote controller!"
             self.close()
             return
-        self.connector.buffer += packet
+        self.hypervisor.buffer += packet
 
     def handle_write(self):
         self.send(self.buffer)
@@ -119,4 +121,7 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print "Interrupted by user. (Ctrl-C)"
+        sys.exit(1)
+    except Exception as err:
+        print err
         sys.exit(1)

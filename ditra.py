@@ -16,7 +16,7 @@ import handlers
 
 # ------------------ Configuration ------------------
 
-SWITCHES = [("192.168.57.102", 6634, True)]
+SWITCHES = [("192.168.57.102", 6634, False)]
 CONTROLLERS = [("192.168.57.1", 6633)]
 MAP = {}
 
