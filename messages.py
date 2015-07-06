@@ -40,6 +40,8 @@ def parse(packet):
 
 def get_message_type(message):
     """return a string representation of the OF type of message"""
+    if isinstance(message, str):
+        return "'%s'" % message
     return of.const.ofp_type_map[message.type]
 
 # OpenFlow messages
@@ -66,6 +68,16 @@ of_set_config = of.message.set_config(
     miss_send_len=128)
 
 of_flow_add = of.message.flow_add(
+    xid=generate_xid(),
+    cookie=1991, hard_timeout=1,
+    flags=of.const.OFPFF_SEND_FLOW_REM,
+    buffer_id=of.const.OFP_NO_BUFFER,
+    out_port=of.const.OFPP_ANY,
+    out_group=of.const.OFPG_ANY,
+    match=of.match([of.oxm.in_port(1991),]),
+    instructions=[])
+
+of_flow_delete = of.message.flow_delete(
     xid=generate_xid(),
     cookie=1991, hard_timeout=1,
     flags=of.const.OFPFF_SEND_FLOW_REM,

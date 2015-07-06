@@ -3,25 +3,32 @@
 # Copyright (c) 2015 Hassib Belhaj-Hassine <hassib.belhaj at tum.de>
 
 """
-proxy for use with ditra
+SDN proxy for use with ditra
 """
 
 import sys
 import asyncore
 import socket
-import time
 
 
 # ------------------ Configuration ------------------
 
 LISTEN_PORT = 6633
 LISTEN_ADDRESS = "0.0.0.0"
-CONTROLLERS = {}
 
 # ---------------------------------------------------
 
+controllers = {}
 
 class ConnectionAcceptor(asyncore.dispatcher):
+    """Responsible for binding to a port and accepting connections
+
+    Upon instantiation, we bind to a local port and start
+    listening for incoming connections. Connection are assumed
+    to be from ditra hypervisor instances and are accepted.
+    A Hypervisor object is then instantiated and the resulting
+    socket is passed to it.
+    """
     def __init__(self, (address, port)):
         asyncore.dispatcher.__init__(self)
         self.port = port
@@ -49,6 +56,7 @@ class Hypervisor(asyncore.dispatcher):
         packet = self.recv(4096)
         if packet == "":
             print "[WARNING] Socket closed by remote hypervisor!"
+            print "Closing connection to Ditra"
             self.close()
             return
         # Initiate controller
@@ -57,18 +65,16 @@ class Hypervisor(asyncore.dispatcher):
             controller_address = packet[:delimiter]
             controller_port = int(packet[(delimiter+1):])
             pair = (controller_address, controller_port)
-            if pair in CONTROLLERS:
-                self.controller = CONTROLLERS[pair]
-                self.controller.hypervisor.close()
+            if pair in controllers:
+                self.controller = controllers[pair]
                 print "Controller switched"
             else:
                 self.controller = Controller(pair)
-                CONTROLLERS[pair] = self.controller
+                controllers[pair] = self.controller
             self.controller.hypervisor = self
-            time.sleep(0.1)
             return
         # If controller initiated, pass messages
-        if self.controller and self.controller.hypervisor == self:
+        if self.controller:
             self.controller.buffer += packet
 
     def handle_write(self):
@@ -77,12 +83,6 @@ class Hypervisor(asyncore.dispatcher):
 
     def writable(self):
         return bool(self.buffer)
-
-    def close(self):
-        if self.buffer:
-            self.handle_write()
-        print "Closing connection to Ditra"
-        asyncore.dispatcher.close(self)
 
 
 class Controller(asyncore.dispatcher):
@@ -100,7 +100,11 @@ class Controller(asyncore.dispatcher):
         packet = self.recv(4096)
         if packet == "":
             print "[WARNING] Socket closed by remote controller!"
+            print "Closing connection to controller and associated Ditra."
             self.close()
+            self.hypervisor.close()
+            # de-register from controllers list
+            del controllers[(self.address, self.port)]
             return
         self.hypervisor.buffer += packet
 

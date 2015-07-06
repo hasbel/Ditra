@@ -16,9 +16,14 @@ import handlers
 
 # ------------------ Configuration ------------------
 
-SWITCHES = [("192.168.57.102", 6634, False)]
-CONTROLLERS = [("192.168.57.1", 6633)]
-MAP = {}
+SWITCHES = [
+    {
+    "address" : ("192.168.57.102", 6634),
+    "proxy_address" : ("192.168.57.1", 6633),
+    "controller_address" : ("192.168.57.101", 6633),
+    "needs_migration" : False
+    }
+]
 
 # ---------------------------------------------------
 
@@ -30,11 +35,8 @@ def main():
     controller to it's corresponding switch and vice-versa. The last
     step is to start the asyncore loop
     """
-    switch_handlers = []
-    for switch_data in SWITCHES:
-        switch_handlers.append(handlers.Switch(
-            switch_data,
-            controller_data=CONTROLLERS[0]))
+    for kwargs in SWITCHES:
+        handlers.Switch(**kwargs)
 
     while True:
         asyncore.loop(use_poll=True)
