@@ -42,6 +42,7 @@ class ConnectionAcceptor(asyncore.dispatcher):
         pair = self.accept()
         if pair:
             sock, address = pair
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
             Hypervisor(sock)
             print "Connection from: ", address
 
@@ -55,7 +56,7 @@ class Hypervisor(asyncore.dispatcher):
     def handle_read(self):
         packet = self.recv(4096)
         if packet == "":
-            print "[WARNING] Socket closed by remote hypervisor!"
+            print "[WARNING] Socket closed by remote hypervisor %s" % self.addr
             print "Closing connection to Ditra"
             self.close()
             return
@@ -63,7 +64,9 @@ class Hypervisor(asyncore.dispatcher):
         if not self.controller:
             delimiter = packet.index(":")
             controller_address = packet[:delimiter]
-            controller_port = int(packet[(delimiter+1):])
+            # Assume port number has 4 digits
+            controller_port = int(packet[(delimiter+1):(delimiter+5)])
+            packet = packet[(delimiter+5):]
             pair = (controller_address, controller_port)
             if pair in controllers:
                 self.controller = controllers[pair]
@@ -72,7 +75,8 @@ class Hypervisor(asyncore.dispatcher):
                 self.controller = Controller(pair)
                 controllers[pair] = self.controller
             self.controller.hypervisor = self
-            return
+            if packet == "":
+                return
         # If controller initiated, pass messages
         if self.controller:
             self.controller.buffer += packet
@@ -91,6 +95,7 @@ class Controller(asyncore.dispatcher):
         self.port = port
         self.address = address
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
         self.connect((address, port))
         self.hypervisor = None
         self.buffer = ""
@@ -117,7 +122,7 @@ class Controller(asyncore.dispatcher):
 
 
 def main():
-    acceptor = ConnectionAcceptor((LISTEN_ADDRESS, LISTEN_PORT))
+    ConnectionAcceptor((LISTEN_ADDRESS, LISTEN_PORT))
     asyncore.loop()
 
 if __name__ == '__main__':

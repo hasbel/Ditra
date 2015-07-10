@@ -1,0 +1,1 @@
+sudo timeout 50 tshark -i eth1 -e frame.time_relative -e of12.features_request.xid -e of12.features_reply.xid -T fields -f "port 6633" -R "of12.features_reply.type or of12.features_request.type" -l -E separator=, >capture 2>/dev/null &
