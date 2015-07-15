@@ -19,9 +19,9 @@ import handlers
 SWITCHES = [
     {
     "address" : ("192.168.57.102", 6634),
-    "proxy_address" : ("192.168.57.1", 6633),
+    "proxy_address" : ("192.168.57.100", 6633),
     "controller_address" : ("192.168.57.101", 6633),
-    "needs_migration" : False
+    "needs_migration" : True
     }
 ]
 

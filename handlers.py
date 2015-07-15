@@ -33,7 +33,7 @@ class BasicDispatcher(asyncore.dispatcher):
 
     def handle_read(self):
         """receive, parse and pass packets to handle_message()"""
-        packet = self.recv(4096)
+        packet = self.recv(8192)
         if packet == "":
             #print "[WARNING] Socket closed by remote host %s:%s" % (
             #    self.address,self.port)
@@ -85,8 +85,10 @@ class Switch(BasicDispatcher):
         self.features_reply_received = False
         self.migrating = False
         self.controller_active = False
+        self.giving_up = False
         ######### testing ##########
         self.last_xid = 0
+        self.first_received = False
         ###########################
 
     def handle_connect(self):
@@ -123,6 +125,7 @@ class Switch(BasicDispatcher):
                 self.handle_migration(message)
             else:
                 self.activate_controller()
+                self.controller.send_to_switch()
 
     def handle_migration(self, message):
         """Handle the process of taking over control of the switch
@@ -135,29 +138,34 @@ class Switch(BasicDispatcher):
         successfully connecting to the proxy.
         """
         if self.migrating:
-            if messages.get_message_type(message) == "OFPT_FLOW_REMOVED":
-                # todo: use xid or match to differentiate? what if another flow removed occurs?
+            if (messages.get_message_type(message) == "OFPT_FLOW_REMOVED"
+                and message.cookie == 1991):
                 self.migrating = False
-                self.needs_migration = False
+                self.controller.send_to_switch()
                 #print "Switch migration successfully completed!"
         else:
             self.buffer.append(messages.of_flow_add)
             self.migrating = True
             self.activate_controller()
 
-    def handle_switch_give_up(self):
+    def handle_switch_give_up(self, message):
         """Function is called after receiving the flow_deleted msg"""
-        #print "giving up control"
-        if self.buffer:
-            self.handle_write()
-        self.close()
-        #print "Handler for switch with dpid %s closed." % self.dpid
-        if self.controller.buffer:
-            self.controller.handle_write()
-        self.controller.close()
-        ########## testing ######
-        print "Migration: ", self.last_xid
-        ########################
+        # TODO: ADD timer and close
+        if message.type == 11 and not self.giving_up:
+            #print "giving up control"
+            ########## testing ######
+            print "Switch migrated: ", self.last_xid
+            ########################
+            if self.buffer:
+                self.handle_write()
+            #print "Handler for switch with dpid %s closed." % self.dpid
+            if self.controller.buffer:
+                self.controller.handle_write()
+            self.giving_up = True
+        if message.type in [3, 6, 8, 19, 21, 23, 25]:
+            self.controller.buffer.append(message)
+        #self.close()
+        #self.controller.close()
 
     def activate_controller(self):
         """Function responsible for starting the controller channel"""
@@ -167,8 +175,7 @@ class Switch(BasicDispatcher):
                 self.controller_address,
                 self.proxy_address,
                 self.migrating)
-            self.controller_active = True
-            self.controller.add_switch(self)
+            self.controller.switch = self
         else:
             print "[WARNING] Controller undefined"
         # TODO: IF controller is activated it can start sending messages, is this ok?
@@ -182,10 +189,10 @@ class Switch(BasicDispatcher):
             self.handle_migration(message)
         # Should we give up control of switch?
         elif (messages.get_message_type(message) == "OFPT_FLOW_REMOVED"
-              and message.cookie == 1991):
+              and message.cookie == 1991) or self.giving_up :
             # cookie 1991 is reserved for switch migration
-            self.handle_switch_give_up()
-        elif self.controller_active:
+            self.handle_switch_give_up(message)
+        elif self.controller:
             ########### TESTING #########
             self.last_xid = message.xid
             ############################
@@ -196,39 +203,60 @@ class Controller(BasicDispatcher):
     """Controller handling functionality, understandable by asyncore"""
     def __init__(self, controller_address, proxy_address, needs_migration=False):
         BasicDispatcher.__init__(self, proxy_address)
-        self.switches = []
+        self.switch = None
         self.hello_received = False
         self.internal_switch_buffer = []
         self.needs_migration = needs_migration
-        self.buffer.append(controller_address[0] + ":" + str(controller_address[1]))
+        self.switch_active = False
+        self.configure_proxy(controller_address)
+        ######### testing ##########
+        self.controller_address = controller_address
+        self.first_received = False
+        ###########################
+
+    def configure_proxy(self, controller_address):
+        """Tell the proxy to which controller we should be connected"""
+        self.buffer.append(controller_address[0] + ":"
+                           + str(controller_address[1]))
 
     def handle_connect(self):
         """Executed just after connecting to controller"""
         #print "Controller initiated on: %s:%s" % (self.address, self.port)
         if self.needs_migration:
             self.hello_received = True
-            self.switches[0].buffer.append(messages.of_flow_delete)
+            self.switch.buffer.append(messages.of_flow_delete)
         else:
             self.buffer.append(messages.of_hello)
 
-    def add_switch(self, switch):
-        """Set the switch to which messages should be sent
+    def send_to_switch(self):
+        """Start sending the buffered messages to the switch
 
-        First, send the contents of the internal switch buffer to
-        the switch. All futures messages received from controller
-        should also be sent to the switch."""
-        self.switches.append(switch)
+        All messages received from the controller/proxy and internally
+        buffered should be sent to the switch. all futures messages
+        received from the controller/switch we be directly sent to the
+        switch."""
+        self.switch_active = True
         for message in self.internal_switch_buffer:
-            switch.buffer.append(message)
+            self.switch.buffer.append(message)
         self.internal_switch_buffer = []
 
     def handle_message(self, message):
         if not self.hello_received:
             if messages.get_message_type(message) == "OFPT_HELLO":
                 self.hello_received = True
-        elif self.switches:
+        elif self.switch_active:
+            #### TESTING #######
+            if self.needs_migration and not self.first_received:
+                print "Controller migrated: ", message.xid
+                self.first_received = True
+            ####################
             for message in self.internal_switch_buffer:
-                self.switches[0].buffer.append(message)
-            self.switches[0].buffer.append(message)
+                self.switch.buffer.append(message)
+            self.switch.buffer.append(message)
         else:
+            #### TESTING #######
+            if not self.first_received:
+                print "Controller migrated: ", message.xid
+                self.first_received = True
+            ####################
             self.internal_switch_buffer.append(message)

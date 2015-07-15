@@ -34,6 +34,7 @@ class ConnectionAcceptor(asyncore.dispatcher):
         self.port = port
         self.address = address
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.bind((address, port))
         self.listen(2)
         print "Listening on %s:%s" % (address, port)
@@ -54,9 +55,9 @@ class Hypervisor(asyncore.dispatcher):
         self.buffer = ""
 
     def handle_read(self):
-        packet = self.recv(4096)
+        packet = self.recv(8192)
         if packet == "":
-            print "[WARNING] Socket closed by remote hypervisor %s" % self.addr
+            print "[WARNING] Socket closed by remote hypervisor", self.addr
             print "Closing connection to Ditra"
             self.close()
             return
